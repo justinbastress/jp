@@ -41,6 +41,10 @@ func main() {
 			Name:  "no-null",
 			Usage: "Omit null outputs.",
 		},
+		cli.BoolFlag{
+			Name:  "as-array",
+			Usage: "Treat multiple inputs as a single array.",
+		},
 	}
 	app.Action = runMainAndExit
 
@@ -112,6 +116,11 @@ func runMain(c *cli.Context) int {
 	inputs, err := readInput(jsonParser)
 	if err != nil {
 		return errMsg(err.Error())
+	}
+	if  c.Bool("as-array") {
+		inputs = []interface{}{
+			inputs,
+		}
 	}
 	for _, input := range inputs {
 		result, err := jmespath.Search(expression, input)
