@@ -37,6 +37,10 @@ func main() {
 			Name:  "ast",
 			Usage: "Only print the AST of the parsed expression.  Do not rely on this output, only useful for debugging purposes.",
 		},
+		cli.BoolFlag{
+			Name:  "no-null",
+			Usage: "Omit null outputs.",
+		},
 	}
 	app.Action = runMainAndExit
 
@@ -51,6 +55,18 @@ func errMsg(msg string, a ...interface{}) int {
 	fmt.Fprintf(os.Stderr, msg, a...)
 	fmt.Fprintln(os.Stderr)
 	return 1
+}
+
+func readInput(jsonParser *json.Decoder) ([]interface{}, error) {
+	var ret []interface{}
+	for jsonParser.More() {
+		var input interface{}
+		if err := jsonParser.Decode(&input); err != nil {
+			return nil, fmt.Errorf("Error parsing input json: %s\n", err)
+		}
+		ret = append(ret, input)
+	}
+	return ret, nil
 }
 
 func runMain(c *cli.Context) int {
@@ -82,7 +98,6 @@ func runMain(c *cli.Context) int {
 		fmt.Printf("%s\n", parsed)
 		return 0
 	}
-	var input interface{}
 	var jsonParser *json.Decoder
 	if c.String("filename") != "" {
 		f, err := os.Open(c.String("filename"))
@@ -94,30 +109,34 @@ func runMain(c *cli.Context) int {
 	} else {
 		jsonParser = json.NewDecoder(os.Stdin)
 	}
-	if err := jsonParser.Decode(&input); err != nil {
-		errMsg("Error parsing input json: %s\n", err)
-		return 2
-	}
-	result, err := jmespath.Search(expression, input)
+	inputs, err := readInput(jsonParser)
 	if err != nil {
-		if syntaxError, ok := err.(jmespath.SyntaxError); ok {
-			return errMsg("%s\n%s\n",
-				syntaxError,
-				syntaxError.HighlightLocation())
-		}
-		return errMsg("Error evaluating JMESPath expression: %s", err)
+		return errMsg(err.Error())
 	}
-	converted, isString := result.(string)
-	if c.Bool("unquoted") && isString {
-		os.Stdout.WriteString(converted)
-	} else {
-		toJSON, err := json.MarshalIndent(result, "", "  ")
+	for _, input := range inputs {
+		result, err := jmespath.Search(expression, input)
 		if err != nil {
-			errMsg("Error marshalling result to JSON: %s\n", err)
-			return 3
+			if syntaxError, ok := err.(jmespath.SyntaxError); ok {
+				return errMsg("%s\n%s\n",
+					syntaxError,
+					syntaxError.HighlightLocation())
+			}
+			return errMsg("Error evaluating JMESPath expression: %s", err)
 		}
-		os.Stdout.Write(toJSON)
+		if result != nil || !c.Bool("no-null") {
+			converted, isString := result.(string)
+			if c.Bool("unquoted") && isString {
+				os.Stdout.WriteString(converted)
+			} else {
+				toJSON, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					errMsg("Error marshalling result to JSON: %s\n", err)
+					return 3
+				}
+				os.Stdout.Write(toJSON)
+			}
+			os.Stdout.WriteString("\n")
+		}
 	}
-	os.Stdout.WriteString("\n")
 	return 0
 }
