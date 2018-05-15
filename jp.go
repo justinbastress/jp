@@ -42,8 +42,12 @@ func main() {
 			Usage: "Omit null outputs.",
 		},
 		cli.BoolFlag{
-			Name:  "as-array",
-			Usage: "Treat multiple inputs as a single array.",
+			Name: "pretty",
+			Usage: "Output indented JSON",
+		},
+		cli.IntFlag{
+			Name: "buffer-size",
+			Usage: "Size of input buffer",
 		},
 	}
 	app.Action = runMainAndExit
@@ -59,18 +63,6 @@ func errMsg(msg string, a ...interface{}) int {
 	fmt.Fprintf(os.Stderr, msg, a...)
 	fmt.Fprintln(os.Stderr)
 	return 1
-}
-
-func readInput(jsonParser *json.Decoder) ([]interface{}, error) {
-	var ret []interface{}
-	for jsonParser.More() {
-		var input interface{}
-		if err := jsonParser.Decode(&input); err != nil {
-			return nil, fmt.Errorf("Error parsing input json: %s\n", err)
-		}
-		ret = append(ret, input)
-	}
-	return ret, nil
 }
 
 func runMain(c *cli.Context) int {
@@ -113,16 +105,23 @@ func runMain(c *cli.Context) int {
 	} else {
 		jsonParser = json.NewDecoder(os.Stdin)
 	}
-	inputs, err := readInput(jsonParser)
-	if err != nil {
-		return errMsg(err.Error())
+
+	bufferSize := c.Int("buffer-size")
+	if bufferSize == 0 {
+		bufferSize = 1
 	}
-	if  c.Bool("as-array") {
-		inputs = []interface{}{
-			inputs,
+	inputs := make(chan interface{}, 1)
+	go func() {
+		for jsonParser.More() {
+			var input interface{}
+			if err := jsonParser.Decode(&input); err != nil {
+				panic(fmt.Errorf("Error parsing input json: %s\n", err))
+			}
+			inputs <- input
 		}
-	}
-	for _, input := range inputs {
+		close(inputs)
+	}()
+	for input := range inputs {
 		result, err := jmespath.Search(expression, input)
 		if err != nil {
 			if syntaxError, ok := err.(jmespath.SyntaxError); ok {
@@ -137,7 +136,13 @@ func runMain(c *cli.Context) int {
 			if c.Bool("unquoted") && isString {
 				os.Stdout.WriteString(converted)
 			} else {
-				toJSON, err := json.MarshalIndent(result, "", "  ")
+				var toJSON []byte
+				var err error
+				if c.Bool("pretty") {
+					toJSON, err = json.MarshalIndent(result, "", "  ")
+				} else {
+					toJSON, err = json.Marshal(result)
+				}
 				if err != nil {
 					errMsg("Error marshalling result to JSON: %s\n", err)
 					return 3
